@@ -1,0 +1,442 @@
+{
+  "name": "SEO Agent - Database to AI Optimization",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "seo-optimize",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-trigger",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [240, 300],
+      "webhookId": "seo-optimize-webhook"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validate-input",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "validate-table",
+              "leftValue": "={{ $json.table }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "input-validation",
+      "name": "Input Validation",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [460, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, {{ $json.content_field || 'content' }} as content, title, name, description,\n       seo_title, seo_meta_description\nFROM {{ $json.table }}\nWHERE id = {{ $json.id }}\nLIMIT 1",
+        "options": {}
+      },
+      "id": "fetch-data",
+      "name": "Fetch Data from PostgreSQL",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [680, 180],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "check-data-exists",
+              "leftValue": "={{ $json.id }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-data-exists",
+      "name": "Check Data Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [900, 180]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Prepare content for AI processing\nconst item = $input.all()[0].json;\n\n// Get the content from various possible fields\nconst content = item.content || item.description || item.name || item.title || '';\nconst currentTitle = item.title || item.name || '';\n\n// Create the AI prompt\nconst prompt = `Analyze this content and create SEO-optimized title and meta description:\n\nContent: ${content}\nCurrent Title: ${currentTitle}\n\nRequirements:\n- Title: Max 60 characters, compelling and keyword-rich\n- Meta Description: 150-160 characters, actionable and descriptive\n- Focus on search intent and user value\n- Make it engaging and click-worthy\n\nReturn ONLY a JSON object in this exact format:\n{\n  \"seo_title\": \"optimized title here\",\n  \"seo_meta_description\": \"optimized description here\"\n}`;\n\nreturn {\n  content: content,\n  current_title: currentTitle,\n  ai_prompt: prompt,\n  record_id: item.id,\n  table_name: $('Webhook Trigger').first().json.table\n};"
+      },
+      "id": "prepare-ai-input",
+      "name": "Prepare AI Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1120, 80]
+    },
+    {
+      "parameters": {
+        "resource": "chat",
+        "operation": "create",
+        "chatId": "gpt-3.5-turbo",
+        "messages": {
+          "values": [
+            {
+              "role": "user",
+              "content": "={{ $json.ai_prompt }}"
+            }
+          ]
+        },
+        "options": {
+          "temperature": 0.7,
+          "maxTokens": 200
+        }
+      },
+      "id": "openai-processing",
+      "name": "OpenAI Processing",
+      "type": "n8n-nodes-base.openAi",
+      "typeVersion": 1,
+      "position": [1340, 80],
+      "credentials": {
+        "openAiApi": {
+          "id": "openai-credentials",
+          "name": "OpenAI API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api-inference.huggingface.co/models/microsoft/DialoGPT-large",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "inputs",
+              "value": "={{ $json.ai_prompt }}"
+            },
+            {
+              "name": "parameters",
+              "value": "={\"temperature\": 0.7, \"max_new_tokens\": 200}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "huggingface-processing",
+      "name": "Hugging Face Processing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 180],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "huggingface-credentials",
+          "name": "Hugging Face API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:11434/api/generate",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "model",
+              "value": "llama2"
+            },
+            {
+              "name": "prompt",
+              "value": "={{ $json.ai_prompt }}"
+            },
+            {
+              "name": "stream",
+              "value": false
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ollama-processing",
+      "name": "Ollama Processing (Local)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1340, 280]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI response and extract SEO data\nconst items = $input.all();\nlet aiResponse = '';\nlet seoData = null;\n\n// Handle different AI service responses\nif (items.some(item => item.json.choices)) {\n  // OpenAI response\n  aiResponse = items.find(item => item.json.choices).json.choices[0].message.content;\n} else if (items.some(item => item.json.generated_text)) {\n  // Hugging Face response\n  aiResponse = items.find(item => item.json.generated_text).json.generated_text;\n} else if (items.some(item => item.json.response)) {\n  // Ollama response\n  aiResponse = items.find(item => item.json.response).json.response;\n}\n\n// Try to parse JSON from AI response\ntry {\n  // Clean the response to extract JSON\n  const jsonMatch = aiResponse.match(/\\{[^}]+\\}/);\n  if (jsonMatch) {\n    seoData = JSON.parse(jsonMatch[0]);\n  } else {\n    throw new Error('No JSON found in response');\n  }\n} catch (error) {\n  // Fallback: extract title and description manually\n  const titleMatch = aiResponse.match(/title[\"':]\\s*[\"']([^\"']+)[\"']/i);\n  const descMatch = aiResponse.match(/description[\"':]\\s*[\"']([^\"']+)[\"']/i);\n  \n  seoData = {\n    seo_title: titleMatch ? titleMatch[1] : 'SEO Title Generated',\n    seo_meta_description: descMatch ? descMatch[1] : 'SEO meta description generated'\n  };\n}\n\n// Get original data\nconst originalData = $('Prepare AI Input').first().json;\n\nreturn {\n  record_id: originalData.record_id,\n  table_name: originalData.table_name,\n  seo_title: seoData.seo_title,\n  seo_meta_description: seoData.seo_meta_description,\n  ai_raw_response: aiResponse\n};"
+      },
+      "id": "process-ai-response",
+      "name": "Process AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1560, 180]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE {{ $json.table_name }}\nSET seo_title = '{{ $json.seo_title }}',\n    seo_meta_description = '{{ $json.seo_meta_description }}',\n    seo_updated_at = CURRENT_TIMESTAMP\nWHERE id = {{ $json.record_id }}\nRETURNING id, seo_title, seo_meta_description, seo_updated_at",
+        "options": {}
+      },
+      "id": "update-database",
+      "name": "Update Database",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1780, 180],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-credentials",
+          "name": "PostgreSQL Database"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"id\": {{ $json.id }},\n  \"table\": \"{{ $('Webhook Trigger').first().json.table }}\",\n  \"updated_fields\": {\n    \"seo_title\": \"{{ $json.seo_title }}\",\n    \"seo_meta_description\": \"{{ $json.seo_meta_description }}\"\n  },\n  \"timestamp\": \"{{ $now }}\"\n}",
+        "options": {}
+      },
+      "id": "success-response",
+      "name": "Success Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [2000, 180]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"Invalid input parameters\",\n  \"message\": \"Please provide both 'id' and 'table' parameters\",\n  \"timestamp\": \"{{ $now }}\"\n}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "validation-error",
+      "name": "Validation Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [680, 400]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"Record not found\",\n  \"message\": \"No record found with ID {{ $('Webhook Trigger').first().json.id }} in table {{ $('Webhook Trigger').first().json.table }}\",\n  \"timestamp\": \"{{ $now }}\"\n}",
+        "options": {
+          "responseCode": 404
+        }
+      },
+      "id": "not-found-error",
+      "name": "Not Found Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1120, 280]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Input Validation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Validation": {
+      "main": [
+        [
+          {
+            "node": "Fetch Data from PostgreSQL",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Validation Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Data from PostgreSQL": {
+      "main": [
+        [
+          {
+            "node": "Check Data Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Data Exists": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Input",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Not Found Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Input": {
+      "main": [
+        [
+          {
+            "node": "OpenAI Processing",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Hugging Face Processing",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Ollama Processing (Local)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Processing": {
+      "main": [
+        [
+          {
+            "node": "Process AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hugging Face Processing": {
+      "main": [
+        [
+          {
+            "node": "Process AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ollama Processing (Local)": {
+      "main": [
+        [
+          {
+            "node": "Process AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process AI Response": {
+      "main": [
+        [
+          {
+            "node": "Update Database",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Database": {
+      "main": [
+        [
+          {
+            "node": "Success Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [
+    {
+      "createdAt": "2025-07-05T10:00:00.000Z",
+      "updatedAt": "2025-07-05T10:00:00.000Z",
+      "id": "seo-automation",
+      "name": "SEO Automation"
+    }
+  ],
+  "triggerCount": 1,
+  "updatedAt": "2025-07-05T10:00:00.000Z",
+  "versionId": "seo-agent-v1"
+}
